@@ -13,6 +13,10 @@ use fyrox::{
 	},
 	plugin::{Plugin, PluginContext},
 };
+use std::{
+	collections::hash_map::RandomState,
+	hash::{BuildHasher, Hash},
+};
 
 const GRID_SIZE: usize = 8;
 const CELL_PX: f32 = 80.0;
@@ -131,23 +135,20 @@ impl GameState {
 	}
 
 	fn generate_new_pieces(&mut self) {
-		use std::collections::hash_map::RandomState;
-		use std::hash::{BuildHasher, Hash, Hasher};
-
 		let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
 
 		let hasher = RandomState::new();
 		let mut h1 = hasher.build_hasher();
 		time.hash(&mut h1);
-		let idx1 = (h1.finish() as usize) % PIECES.len();
+		let idx1 = (hasher.hash_one(time) as usize) % PIECES.len();
 
 		let mut h2 = hasher.build_hasher();
 		(time + 1).hash(&mut h2);
-		let idx2 = (h2.finish() as usize) % PIECES.len();
+		let idx2 = (hasher.hash_one(time + 1) as usize) % PIECES.len();
 
 		let mut h3 = hasher.build_hasher();
 		(time + 2).hash(&mut h3);
-		let idx3 = (h3.finish() as usize) % PIECES.len();
+		let idx3 = (hasher.hash_one(time + 2) as usize) % PIECES.len();
 
 		self.available_pieces = [
 			Shape { blocks: PIECES[idx1] },
@@ -330,60 +331,56 @@ impl Plugin for GamePlugin {
 		let state = self.state.as_mut().unwrap();
 
 		// Handle piece button clicks (these are still buttons)
-		if let Some(btn_msg) = message.data::<fyrox::gui::button::ButtonMessage>() {
-			if matches!(btn_msg, fyrox::gui::button::ButtonMessage::Click) {
-				if let Some(piece_idx) = self.piece_buttons.iter().position(|h| *h == dest) {
-					println!("Piece {} selected", piece_idx);
-					state.selected_piece = Some(piece_idx);
-					self.refresh_ui(ui);
-					return;
-				}
-			}
+		if let Some(btn_msg) = message.data::<fyrox::gui::button::ButtonMessage>()
+			&& matches!(btn_msg, fyrox::gui::button::ButtonMessage::Click)
+			&& let Some(piece_idx) = self.piece_buttons.iter().position(|h| *h == dest)
+		{
+			println!("Piece {} selected", piece_idx);
+			state.selected_piece = Some(piece_idx);
+			self.refresh_ui(ui);
+			return;
 		}
 
 		// Handle board cell clicks (these are now borders, so use mouse events)
-		if let Some(mouse_msg) = message.data::<fyrox::gui::message::MouseButton>() {
-			if *mouse_msg == fyrox::gui::message::MouseButton::Left {
-				if let Some(widget_msg) = message.data::<WidgetMessage>() {
-					if matches!(widget_msg, WidgetMessage::MouseDown { .. }) {
-						if let Some(cell_idx) = self.board_cells.iter().position(|h| *h == dest) {
-							println!("Cell {} clicked", cell_idx);
+		if let Some(mouse_msg) = message.data::<fyrox::gui::message::MouseButton>()
+			&& *mouse_msg == fyrox::gui::message::MouseButton::Left
+			&& let Some(widget_msg) = message.data::<WidgetMessage>()
+			&& matches!(widget_msg, WidgetMessage::MouseDown { .. })
+			&& let Some(cell_idx) = self.board_cells.iter().position(|h| *h == dest)
+		{
+			println!("Cell {} clicked", cell_idx);
 
-							let Some(sel) = state.selected_piece else {
-								println!("No piece selected!");
-								return;
-							};
+			let Some(sel) = state.selected_piece else {
+				println!("No piece selected!");
+				return;
+			};
 
-							println!("Trying to place piece {} at cell {}", sel, cell_idx);
+			println!("Trying to place piece {} at cell {}", sel, cell_idx);
 
-							let x = cell_idx % GRID_SIZE;
-							let y = cell_idx / GRID_SIZE;
+			let x = cell_idx % GRID_SIZE;
+			let y = cell_idx / GRID_SIZE;
 
-							let shape_blocks = state.available_pieces[sel].blocks;
-							let shape = Shape { blocks: shape_blocks };
+			let shape_blocks = state.available_pieces[sel].blocks;
+			let shape = Shape { blocks: shape_blocks };
 
-							println!("Checking if can place at ({}, {})", x, y);
+			println!("Checking if can place at ({}, {})", x, y);
 
-							if state.can_place(&shape, x, y) {
-								println!("Placing piece!");
-								state.place(&shape, x, y);
+			if state.can_place(&shape, x, y) {
+				println!("Placing piece!");
+				state.place(&shape, x, y);
 
-								let line_score = state.clear_complete_lines();
-								if line_score > 0 {
-									println!("Cleared lines! Score: {}", line_score);
-								}
-								state.score += line_score;
-
-								state.selected_piece = None;
-								state.generate_new_pieces();
-
-								self.refresh_ui(ui);
-							} else {
-								println!("Cannot place piece there!");
-							}
-						}
-					}
+				let line_score = state.clear_complete_lines();
+				if line_score > 0 {
+					println!("Cleared lines! Score: {}", line_score);
 				}
+				state.score += line_score;
+
+				state.selected_piece = None;
+				state.generate_new_pieces();
+
+				self.refresh_ui(ui);
+			} else {
+				println!("Cannot place piece there!");
 			}
 		}
 	}
