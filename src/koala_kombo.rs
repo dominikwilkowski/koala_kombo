@@ -1,8 +1,3 @@
-use std::{
-	collections::hash_map::RandomState,
-	hash::{BuildHasher, Hash},
-};
-
 use fyrox::{
 	core::{color::Color, pool::Handle, reflect::prelude::*, visitor::prelude::*},
 	gui::{
@@ -18,6 +13,7 @@ use fyrox::{
 	},
 	plugin::{Plugin, PluginContext},
 };
+use rand::Rng;
 
 const GRID_SIZE: usize = 8;
 const CELL_PX: f32 = 80.0;
@@ -136,20 +132,10 @@ impl GameState {
 	}
 
 	fn generate_new_pieces(&mut self) {
-		let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-
-		let hasher = RandomState::new();
-		let mut h1 = hasher.build_hasher();
-		time.hash(&mut h1);
-		let idx1 = (hasher.hash_one(time) as usize) % PIECES.len();
-
-		let mut h2 = hasher.build_hasher();
-		(time + 1).hash(&mut h2);
-		let idx2 = (hasher.hash_one(time + 1) as usize) % PIECES.len();
-
-		let mut h3 = hasher.build_hasher();
-		(time + 2).hash(&mut h3);
-		let idx3 = (hasher.hash_one(time + 2) as usize) % PIECES.len();
+		let mut rng = rand::rng();
+		let idx1 = rng.random_range(0..PIECES.len());
+		let idx2 = rng.random_range(0..PIECES.len());
+		let idx3 = rng.random_range(0..PIECES.len());
 
 		self.available_pieces = [
 			Shape { blocks: PIECES[idx1] },
@@ -192,7 +178,7 @@ impl GamePlugin {
 			.with_font_size(50.0.into())
 			.build(ctx);
 
-		// Board grid (8x8 borders instead of buttons so we can change background)
+		// Board grid
 		let rows = (0..GRID_SIZE).map(|_| Row::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
 		let cols = (0..GRID_SIZE).map(|_| Column::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
 
