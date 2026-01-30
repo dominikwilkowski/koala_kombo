@@ -1,9 +1,9 @@
 use fyrox::engine::executor::Executor;
 
-mod block_blast_ui;
+mod koala_kombo;
 
 fn main() {
 	let mut executor = Executor::new();
-	executor.add_plugin(block_blast_ui::GamePlugin::default());
+	executor.add_plugin(koala_kombo::GamePlugin::default());
 	executor.run();
 }

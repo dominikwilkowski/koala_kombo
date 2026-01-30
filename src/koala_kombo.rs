@@ -182,12 +182,15 @@ impl GamePlugin {
 
 		// Title
 		let title = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
-			.with_text("Block Blast - Click piece, then click board")
+			.with_font_size(80.0.into())
+			.with_text("Koala Kombo")
 			.build(ctx);
 
 		// Score text
-		self.score_text =
-			TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0))).with_text("Score: 0").build(ctx);
+		self.score_text = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
+			.with_text("Score: 0")
+			.with_font_size(50.0.into())
+			.build(ctx);
 
 		// Board grid (8x8 borders instead of buttons so we can change background)
 		let rows = (0..GRID_SIZE).map(|_| Row::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
@@ -259,11 +262,7 @@ impl GamePlugin {
 			Brush::Solid(Color::from_rgba(40, 40, 40, 255))
 		};
 
-		// Try using foreground as well as background
-		ui.send_message(WidgetMessage::background(handle, MessageDirection::ToWidget, brush.clone().into()));
-		ui.send_message(WidgetMessage::foreground(handle, MessageDirection::ToWidget, brush.into()));
-
-		println!("Painted cell {:?} with filled={}", handle, filled);
+		ui.send_message(WidgetMessage::background(handle, MessageDirection::ToWidget, brush.into()));
 	}
 
 	fn paint_piece_button(ui: &mut UserInterface, handle: Handle<UiNode>, selected: bool) {
@@ -278,24 +277,15 @@ impl GamePlugin {
 	fn refresh_ui(&self, ui: &mut UserInterface) {
 		let state = self.state.as_ref().unwrap();
 
-		println!("Refreshing UI - checking board state:");
-		let mut filled_count = 0;
-
 		// Paint board
 		for y in 0..GRID_SIZE {
 			for x in 0..GRID_SIZE {
 				let idx = GameState::idx(x, y);
 				let handle = self.board_cells[idx];
 				let filled = state.board[idx].filled;
-				if filled {
-					filled_count += 1;
-					println!("  Cell ({}, {}) is filled", x, y);
-				}
 				Self::paint_board_cell(ui, handle, filled);
 			}
 		}
-
-		println!("Total filled cells: {}", filled_count);
 
 		// Paint piece selection
 		for i in 0..3 {
@@ -310,8 +300,6 @@ impl GamePlugin {
 
 impl Plugin for GamePlugin {
 	fn init(&mut self, _scene_path: Option<&str>, context: PluginContext) {
-		println!("Plugin::init() called!");
-
 		let ui = context.user_interfaces.first_mut();
 		let ui_root = ui.root();
 
@@ -322,7 +310,6 @@ impl Plugin for GamePlugin {
 		}
 
 		self.refresh_ui(ui);
-		println!("UI built and refreshed!");
 	}
 
 	fn on_ui_message(&mut self, context: &mut PluginContext, message: &UiMessage) {
@@ -336,7 +323,6 @@ impl Plugin for GamePlugin {
 			&& matches!(btn_msg, ButtonMessage::Click)
 			&& let Some(piece_idx) = self.piece_buttons.iter().position(|h| *h == dest)
 		{
-			println!("Piece {} selected", piece_idx);
 			state.selected_piece = Some(piece_idx);
 			self.refresh_ui(ui);
 			return;
@@ -348,14 +334,9 @@ impl Plugin for GamePlugin {
 			&& *button == MouseButton::Left
 			&& let Some(cell_idx) = self.board_cells.iter().position(|h| *h == dest)
 		{
-			println!("==> Cell {} clicked", cell_idx);
-
 			let Some(sel) = state.selected_piece else {
-				println!("    No piece selected!");
 				return;
 			};
-
-			println!("    Trying to place piece {} at cell {}", sel, cell_idx);
 
 			let x = cell_idx % GRID_SIZE;
 			let y = cell_idx / GRID_SIZE;
@@ -363,35 +344,16 @@ impl Plugin for GamePlugin {
 			let shape_blocks = state.available_pieces[sel].blocks;
 			let shape = Shape { blocks: shape_blocks };
 
-			println!("    Checking if can place at ({}, {})", x, y);
-
 			if state.can_place(&shape, x, y) {
-				println!("    ✓ Placing piece!");
 				state.place(&shape, x, y);
 
-				println!("    Board state after placement:");
-				for cy in 0..GRID_SIZE {
-					for cx in 0..GRID_SIZE {
-						let idx = GameState::idx(cx, cy);
-						print!("{}", if state.board[idx].filled { "█" } else { "·" });
-					}
-					println!();
-				}
-
 				let line_score = state.clear_complete_lines();
-				if line_score > 0 {
-					println!("    Cleared lines! Score: {}", line_score);
-				}
 				state.score += line_score;
 
 				state.selected_piece = None;
 				state.generate_new_pieces();
 
-				println!("    Calling refresh_ui...");
 				self.refresh_ui(ui);
-				println!("    refresh_ui complete!");
-			} else {
-				println!("    ✗ Cannot place piece there!");
 			}
 		}
 	}
