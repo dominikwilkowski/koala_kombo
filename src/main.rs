@@ -4,10 +4,11 @@ use fyrox::{
 };
 
 mod koala_kombo;
+mod plugin;
 
 fn main() {
 	Log::set_verbosity(MessageKind::Warning);
 	let mut executor = Executor::new();
-	executor.add_plugin(koala_kombo::GamePlugin::default());
+	executor.add_plugin(plugin::GamePlugin::default());
 	executor.run();
 }
