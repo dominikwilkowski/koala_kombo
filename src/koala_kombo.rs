@@ -25,28 +25,38 @@ pub struct Cell {
 #[derive(Clone, Debug)]
 pub struct Shape {
 	pub blocks: &'static [(i32, i32)],
+	pub used: bool,
 }
 
 #[derive(Debug)]
 pub struct KoalaKombo {
 	pub board: Vec<Cell>,
 	pub available_pieces: [Shape; 3],
-	pub selected_piece: Option<usize>,
 	pub score: u32,
 }
 
 impl KoalaKombo {
 	pub fn new() -> Self {
-		Self {
+		let mut game = Self {
 			board: vec![Cell { filled: false }; GRID_SIZE * GRID_SIZE],
 			available_pieces: [
-				Shape { blocks: PIECES[0] },
-				Shape { blocks: PIECES[1] },
-				Shape { blocks: PIECES[2] },
+				Shape {
+					blocks: PIECES[0],
+					used: false,
+				},
+				Shape {
+					blocks: PIECES[1],
+					used: false,
+				},
+				Shape {
+					blocks: PIECES[2],
+					used: false,
+				},
 			],
-			selected_piece: None,
 			score: 0,
-		}
+		};
+		game.generate_new_pieces();
+		game
 	}
 
 	pub fn idx(x: usize, y: usize) -> usize {
@@ -116,6 +126,14 @@ impl KoalaKombo {
 		score
 	}
 
+	pub fn mark_piece_used(&mut self, piece_index: usize) {
+		self.available_pieces[piece_index].used = true;
+	}
+
+	pub fn all_pieces_used(&self) -> bool {
+		self.available_pieces.iter().all(|piece| piece.used)
+	}
+
 	pub fn generate_new_pieces(&mut self) {
 		let mut rng = rand::rng();
 		let idx1 = rng.random_range(0..PIECES.len());
@@ -123,9 +141,18 @@ impl KoalaKombo {
 		let idx3 = rng.random_range(0..PIECES.len());
 
 		self.available_pieces = [
-			Shape { blocks: PIECES[idx1] },
-			Shape { blocks: PIECES[idx2] },
-			Shape { blocks: PIECES[idx3] },
+			Shape {
+				blocks: PIECES[idx1],
+				used: false,
+			},
+			Shape {
+				blocks: PIECES[idx2],
+				used: false,
+			},
+			Shape {
+				blocks: PIECES[idx3],
+				used: false,
+			},
 		];
 	}
 }
