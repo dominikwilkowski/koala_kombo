@@ -4,7 +4,6 @@ pub const GRID_SIZE: usize = 8;
 pub const CELL_PX: f32 = 80.0;
 pub const GAP_PX: f32 = 4.0;
 
-// The pieces that can spawn
 const PIECES: [&[(i32, i32)]; 9] = [
 	&[(0, 0)],                                 // Single block
 	&[(0, 0), (1, 0)],                         // Horizontal 2
@@ -18,96 +17,129 @@ const PIECES: [&[(i32, i32)]; 9] = [
 ];
 
 #[derive(Clone, Copy, Debug)]
-pub struct Cell {
-	pub filled: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct Shape {
+pub struct Piece {
 	pub blocks: &'static [(i32, i32)],
 	pub used: bool,
 }
 
+impl Piece {
+	fn random() -> Self {
+		let idx = rand::rng().random_range(0..PIECES.len());
+		Self {
+			blocks: PIECES[idx],
+			used: false,
+		}
+	}
+}
+
 #[derive(Debug)]
 pub struct KoalaKombo {
-	pub board: Vec<Cell>,
-	pub available_pieces: [Shape; 3],
+	board: [bool; GRID_SIZE * GRID_SIZE],
+	pub pieces: [Piece; 3],
 	pub score: u32,
 }
 
 impl KoalaKombo {
 	pub fn new() -> Self {
-		let mut game = Self {
-			board: vec![Cell { filled: false }; GRID_SIZE * GRID_SIZE],
-			available_pieces: [
-				Shape {
-					blocks: PIECES[0],
-					used: false,
-				},
-				Shape {
-					blocks: PIECES[1],
-					used: false,
-				},
-				Shape {
-					blocks: PIECES[2],
-					used: false,
-				},
-			],
+		Self {
+			board: [false; GRID_SIZE * GRID_SIZE],
+			pieces: [Piece::random(), Piece::random(), Piece::random()],
 			score: 0,
-		};
-		game.generate_new_pieces();
-		game
+		}
 	}
 
-	pub fn idx(x: usize, y: usize) -> usize {
-		y * GRID_SIZE + x
+	pub fn cell_filled(&self, x: usize, y: usize) -> bool {
+		self.board[y * GRID_SIZE + x]
 	}
 
-	fn in_bounds(x: i32, y: i32) -> bool {
-		x >= 0 && y >= 0 && (x as usize) < GRID_SIZE && (y as usize) < GRID_SIZE
-	}
+	/// Check if a piece can be placed at the given anchor position.
+	pub fn can_place(&self, piece_idx: usize, anchor_x: usize, anchor_y: usize) -> bool {
+		let piece = &self.pieces[piece_idx];
+		if piece.used {
+			return false;
+		}
 
-	pub fn can_place(&self, shape: &Shape, anchor_x: usize, anchor_y: usize) -> bool {
 		let ax = anchor_x as i32;
 		let ay = anchor_y as i32;
 
-		for (dx, dy) in shape.blocks {
+		for &(dx, dy) in piece.blocks {
 			let x = ax + dx;
 			let y = ay + dy;
 
-			if !Self::in_bounds(x, y) {
+			if x < 0 || y < 0 || x >= GRID_SIZE as i32 || y >= GRID_SIZE as i32 {
 				return false;
 			}
 
-			let idx = Self::idx(x as usize, y as usize);
-			if self.board[idx].filled {
+			if self.board[y as usize * GRID_SIZE + x as usize] {
 				return false;
 			}
 		}
 		true
 	}
 
-	pub fn place(&mut self, shape: &Shape, anchor_x: usize, anchor_y: usize) {
+	/// Get the cells that would be occupied if placing a piece at the anchor.
+	/// Returns empty Vec if out of bounds.
+	pub fn preview_cells(&self, piece_idx: usize, anchor_x: usize, anchor_y: usize) -> Vec<usize> {
+		let piece = &self.pieces[piece_idx];
 		let ax = anchor_x as i32;
 		let ay = anchor_y as i32;
 
-		for (dx, dy) in shape.blocks {
-			let x = (ax + dx) as usize;
-			let y = (ay + dy) as usize;
-			let idx = Self::idx(x, y);
-			self.board[idx].filled = true;
-		}
+		piece
+			.blocks
+			.iter()
+			.filter_map(|&(dx, dy)| {
+				let x = ax + dx;
+				let y = ay + dy;
+				if x >= 0 && y >= 0 && x < GRID_SIZE as i32 && y < GRID_SIZE as i32 {
+					Some(y as usize * GRID_SIZE + x as usize)
+				} else {
+					None
+				}
+			})
+			.collect()
 	}
 
-	pub fn clear_complete_lines(&mut self) -> u32 {
+	/// Place a piece on the board. Returns true if successful.
+	/// Handles: placement, marking used, clearing lines, score, and regenerating pieces.
+	pub fn place_shape(&mut self, piece_idx: usize, anchor_x: usize, anchor_y: usize) -> bool {
+		if !self.can_place(piece_idx, anchor_x, anchor_y) {
+			return false;
+		}
+
+		// Place the blocks
+		let piece = &self.pieces[piece_idx];
+		let ax = anchor_x as i32;
+		let ay = anchor_y as i32;
+
+		for &(dx, dy) in piece.blocks {
+			let x = (ax + dx) as usize;
+			let y = (ay + dy) as usize;
+			self.board[y * GRID_SIZE + x] = true;
+		}
+
+		// Mark piece as used
+		self.pieces[piece_idx].used = true;
+
+		// Clear complete lines and update score
+		self.score += self.clear_lines();
+
+		// Regenerate pieces if all used
+		if self.pieces.iter().all(|p| p.used) {
+			self.pieces = [Piece::random(), Piece::random(), Piece::random()];
+		}
+
+		true
+	}
+
+	fn clear_lines(&mut self) -> u32 {
 		let mut score = 0;
 
 		// Check rows
 		for y in 0..GRID_SIZE {
-			let row_start = y * GRID_SIZE;
-			if self.board[row_start..row_start + GRID_SIZE].iter().all(|cell| cell.filled) {
+			let start = y * GRID_SIZE;
+			if self.board[start..start + GRID_SIZE].iter().all(|&filled| filled) {
 				for x in 0..GRID_SIZE {
-					self.board[Self::idx(x, y)].filled = false;
+					self.board[y * GRID_SIZE + x] = false;
 				}
 				score += GRID_SIZE as u32;
 			}
@@ -115,44 +147,14 @@ impl KoalaKombo {
 
 		// Check columns
 		for x in 0..GRID_SIZE {
-			if (0..GRID_SIZE).all(|y| self.board[Self::idx(x, y)].filled) {
+			if (0..GRID_SIZE).all(|y| self.board[y * GRID_SIZE + x]) {
 				for y in 0..GRID_SIZE {
-					self.board[Self::idx(x, y)].filled = false;
+					self.board[y * GRID_SIZE + x] = false;
 				}
 				score += GRID_SIZE as u32;
 			}
 		}
 
 		score
-	}
-
-	pub fn mark_piece_used(&mut self, piece_index: usize) {
-		self.available_pieces[piece_index].used = true;
-	}
-
-	pub fn all_pieces_used(&self) -> bool {
-		self.available_pieces.iter().all(|piece| piece.used)
-	}
-
-	pub fn generate_new_pieces(&mut self) {
-		let mut rng = rand::rng();
-		let idx1 = rng.random_range(0..PIECES.len());
-		let idx2 = rng.random_range(0..PIECES.len());
-		let idx3 = rng.random_range(0..PIECES.len());
-
-		self.available_pieces = [
-			Shape {
-				blocks: PIECES[idx1],
-				used: false,
-			},
-			Shape {
-				blocks: PIECES[idx2],
-				used: false,
-			},
-			Shape {
-				blocks: PIECES[idx3],
-				used: false,
-			},
-		];
 	}
 }

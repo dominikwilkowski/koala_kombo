@@ -13,40 +13,35 @@ use fyrox::{
 	plugin::{Plugin, PluginContext},
 };
 
-use crate::koala_kombo::{CELL_PX, GAP_PX, GRID_SIZE, KoalaKombo, Shape};
-
-/// Active drag-and-drop state for a piece being dragged
-#[derive(Debug)]
-struct ActiveDrag {
-	piece_index: usize,
-	hover_cell: Option<usize>,
-	drag_widget: Handle<UiNode>,
-}
+use crate::koala_kombo::{CELL_PX, GAP_PX, GRID_SIZE, KoalaKombo, Piece};
 
 #[derive(Default, Visit, Reflect, Debug)]
 pub struct GamePlugin {
-	ui_root: Handle<UiNode>,
-	board_cells: Vec<Handle<UiNode>>,
-	piece_grid: Handle<UiNode>,
-	piece_buttons: Vec<Handle<UiNode>>,
-	score_text: Handle<UiNode>,
-
 	#[visit(skip)]
 	#[reflect(hidden)]
 	state: Option<KoalaKombo>,
 
+	// UI handles
+	board_cells: Vec<Handle<UiNode>>,
+	piece_tray: Handle<UiNode>,
+	piece_widgets: Vec<Handle<UiNode>>,
+	score_text: Handle<UiNode>,
+
+	// Drag state
 	#[visit(skip)]
 	#[reflect(hidden)]
-	active_drag: Option<ActiveDrag>,
+	dragging: Option<DragState>,
+}
+
+#[derive(Debug)]
+struct DragState {
+	piece_idx: usize,
+	hover_cell: Option<usize>,
 }
 
 impl GamePlugin {
 	fn build_ui(&mut self, ctx: &mut BuildContext) -> Handle<UiNode> {
-		if self.state.is_none() {
-			self.state = Some(KoalaKombo::new());
-		}
-
-		self.board_cells.clear();
+		self.state = Some(KoalaKombo::new());
 
 		// Title
 		let title = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
@@ -54,17 +49,47 @@ impl GamePlugin {
 			.with_text("Koala Kombo")
 			.build(ctx);
 
-		// Score text
+		// Score
 		self.score_text = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
 			.with_text("Score: 0")
 			.with_font_size(50.0.into())
 			.build(ctx);
 
 		// Board grid
+		let board_grid = self.build_board(ctx);
+		let board_border =
+			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(board_grid))
+				.with_stroke_thickness(Thickness::uniform(2.0).into())
+				.build(ctx);
+
+		// Piece tray
+		let piece_children = self.build_piece_widgets(ctx);
+		self.piece_tray = GridBuilder::new(WidgetBuilder::new().with_children(piece_children))
+			.add_rows(vec![Row::strict(170.0)])
+			.add_columns(vec![Column::strict(170.0); 3])
+			.build(ctx);
+
+		let piece_border =
+			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(self.piece_tray))
+				.with_stroke_thickness(Thickness::uniform(2.0).into())
+				.build(ctx);
+
+		StackPanelBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_children([
+			title,
+			self.score_text,
+			board_border,
+			piece_border,
+		]))
+		.build(ctx)
+	}
+
+	fn build_board(&mut self, ctx: &mut BuildContext) -> Handle<UiNode> {
+		self.board_cells.clear();
+
 		let rows = (0..GRID_SIZE).map(|_| Row::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
 		let cols = (0..GRID_SIZE).map(|_| Column::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
 
-		let mut board_children = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+		let mut children = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
 		for y in 0..GRID_SIZE {
 			for x in 0..GRID_SIZE {
 				let cell = BorderBuilder::new(
@@ -78,145 +103,71 @@ impl GamePlugin {
 				.build(ctx);
 
 				self.board_cells.push(cell);
-				board_children.push(cell);
+				children.push(cell);
 			}
 		}
 
-		let board_grid =
-			GridBuilder::new(WidgetBuilder::new().with_children(board_children)).add_rows(rows).add_columns(cols).build(ctx);
-
-		let board_border =
-			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(board_grid))
-				.with_stroke_thickness(Thickness::uniform(2.0).into())
-				.build(ctx);
-
-		// Build piece tray
-		let piece_children = self.build_piece_tray(ctx);
-		self.piece_grid = GridBuilder::new(WidgetBuilder::new().with_children(piece_children))
-			.add_rows(vec![Row::strict(170.0)])
-			.add_columns(vec![Column::strict(170.0), Column::strict(170.0), Column::strict(170.0)])
-			.build(ctx);
-
-		let piece_border =
-			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(self.piece_grid))
-				.with_stroke_thickness(Thickness::uniform(2.0).into())
-				.build(ctx);
-
-		// Root layout
-		StackPanelBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_children([
-			title,
-			self.score_text,
-			board_border,
-			piece_border,
-		]))
-		.build(ctx)
+		GridBuilder::new(WidgetBuilder::new().with_children(children)).add_rows(rows).add_columns(cols).build(ctx)
 	}
 
-	fn build_piece_tray(&mut self, ctx: &mut BuildContext) -> Vec<Handle<UiNode>> {
+	fn build_piece_widgets(&mut self, ctx: &mut BuildContext) -> Vec<Handle<UiNode>> {
+		self.piece_widgets.clear();
 		let state = self.state.as_ref().unwrap();
-		self.piece_buttons.clear();
-		let mut piece_children = Vec::with_capacity(3);
 
+		let mut children = Vec::with_capacity(3);
 		for i in 0..3 {
-			let shape = &state.available_pieces[i];
+			let piece = &state.pieces[i];
+			let shape_grid = Self::build_piece_shape(ctx, piece);
 
-			let shape_grid = if shape.used {
-				Handle::NONE
-			} else {
-				Self::build_shape_preview(ctx, shape)
-			};
-
-			let piece_widget = BorderBuilder::new(
+			// Transparent container
+			let widget = BorderBuilder::new(
 				WidgetBuilder::new()
+					.on_column(i)
 					.with_margin(Thickness::uniform(8.0))
 					.with_width(150.0)
 					.with_height(150.0)
-					.on_column(i)
 					.with_child(shape_grid)
-					.with_background(Brush::Solid(Color::from_rgba(30, 30, 30, 255)).into()),
+					.with_background(Brush::Solid(Color::TRANSPARENT).into()),
 			)
-			.with_stroke_thickness(Thickness::uniform(2.0).into())
+			.with_stroke_thickness(Thickness::uniform(0.0).into())
 			.build(ctx);
 
-			self.piece_buttons.push(piece_widget);
-			piece_children.push(piece_widget);
+			self.piece_widgets.push(widget);
+			children.push(widget);
 		}
 
-		piece_children
+		children
 	}
 
-	fn rebuild_piece_tray(&mut self, ui: &mut UserInterface) {
-		// Remove old piece buttons
-		for &button in &self.piece_buttons {
-			ui.send_message(WidgetMessage::remove(button, MessageDirection::ToWidget));
-		}
-
-		// Build new ones
-		let new_pieces = {
-			let mut build_ctx = ui.build_ctx();
-			self.build_piece_tray(&mut build_ctx)
-		};
-
-		// Add them to the piece grid
-		for piece in new_pieces {
-			ui.send_message(WidgetMessage::link(piece, MessageDirection::ToWidget, self.piece_grid));
-		}
-	}
-
-	fn paint_board_cell(
-		ui: &mut UserInterface,
-		handle: Handle<UiNode>,
-		filled: bool,
-		preview: bool,
-		preview_valid: bool,
-	) {
-		let brush = if preview {
-			if preview_valid {
-				Brush::Solid(Color::from_rgba(100, 200, 100, 180))
-			} else {
-				Brush::Solid(Color::from_rgba(200, 100, 100, 180))
-			}
-		} else if filled {
-			Brush::Solid(Color::from_rgba(100, 150, 255, 255))
-		} else {
-			Brush::Solid(Color::from_rgba(40, 40, 40, 255))
-		};
-
-		ui.send_message(WidgetMessage::background(handle, MessageDirection::ToWidget, brush.into()));
-	}
-
-	fn build_shape_preview(ctx: &mut BuildContext, shape: &Shape) -> Handle<UiNode> {
+	fn build_piece_shape(ctx: &mut BuildContext, piece: &Piece) -> Handle<UiNode> {
 		let (min_x, max_x, min_y, max_y) =
-			shape.blocks.iter().fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |(min_x, max_x, min_y, max_y), &(x, y)| {
+			piece.blocks.iter().fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |(min_x, max_x, min_y, max_y), &(x, y)| {
 				(min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
 			});
 
 		let width = (max_x - min_x + 1) as usize;
 		let height = (max_y - min_y + 1) as usize;
-
 		let cell_size = 30.0;
 		let gap = 2.0;
 
 		let rows = (0..height).map(|_| Row::strict(cell_size + gap)).collect::<Vec<_>>();
 		let cols = (0..width).map(|_| Column::strict(cell_size + gap)).collect::<Vec<_>>();
 
-		let mut children = Vec::new();
-		for (block_x, block_y) in shape.blocks {
-			let grid_x = (block_x - min_x) as usize;
-			let grid_y = (block_y - min_y) as usize;
-
-			let cell = BorderBuilder::new(
-				WidgetBuilder::new()
-					.on_row(grid_y)
-					.on_column(grid_x)
-					.with_margin(Thickness::uniform(gap * 0.5))
-					.with_background(Brush::Solid(Color::from_rgba(100, 150, 255, 255)).into()),
-			)
-			.with_stroke_thickness(Thickness::uniform(1.0).into())
-			.build(ctx);
-
-			children.push(cell);
-		}
+		let children = piece
+			.blocks
+			.iter()
+			.map(|&(bx, by)| {
+				BorderBuilder::new(
+					WidgetBuilder::new()
+						.on_row((by - min_y) as usize)
+						.on_column((bx - min_x) as usize)
+						.with_margin(Thickness::uniform(gap * 0.5))
+						.with_background(Brush::Solid(Color::from_rgba(100, 150, 255, 255)).into()),
+				)
+				.with_stroke_thickness(Thickness::uniform(1.0).into())
+				.build(ctx)
+			})
+			.collect::<Vec<_>>();
 
 		GridBuilder::new(
 			WidgetBuilder::new()
@@ -229,46 +180,67 @@ impl GamePlugin {
 		.build(ctx)
 	}
 
-	fn refresh_ui(&self, ui: &mut UserInterface) {
+	fn refresh(&self, ui: &mut UserInterface) {
 		let state = self.state.as_ref().unwrap();
 
-		// Calculate which cells should show preview
-		let mut preview_cells = Vec::new();
-		let mut preview_valid = false;
-
-		if let Some(ref drag) = self.active_drag
-			&& let Some(hover_cell) = drag.hover_cell
+		// Calculate preview cells if dragging over board
+		let (preview_cells, preview_valid) = if let Some(ref drag) = self.dragging
+			&& let Some(cell_idx) = drag.hover_cell
 		{
-			let hover_x = hover_cell % GRID_SIZE;
-			let hover_y = hover_cell / GRID_SIZE;
-			let shape = &state.available_pieces[drag.piece_index];
+			let x = cell_idx % GRID_SIZE;
+			let y = cell_idx / GRID_SIZE;
+			(state.preview_cells(drag.piece_idx, x, y), state.can_place(drag.piece_idx, x, y))
+		} else {
+			(vec![], false)
+		};
 
-			preview_valid = state.can_place(shape, hover_x, hover_y);
-
-			// Calculate all cells that would be occupied by the shape
-			for (dx, dy) in shape.blocks {
-				let x = hover_x as i32 + dx;
-				let y = hover_y as i32 + dy;
-				if x >= 0 && y >= 0 && (x as usize) < GRID_SIZE && (y as usize) < GRID_SIZE {
-					let idx = KoalaKombo::idx(x as usize, y as usize);
-					preview_cells.push(idx);
-				}
-			}
-		}
-
-		// Paint board
+		// Paint board cells
 		for y in 0..GRID_SIZE {
 			for x in 0..GRID_SIZE {
-				let idx = KoalaKombo::idx(x, y);
-				let handle = self.board_cells[idx];
-				let filled = state.board[idx].filled;
-				let is_preview = preview_cells.contains(&idx);
-				Self::paint_board_cell(ui, handle, filled, is_preview, preview_valid);
+				let idx = y * GRID_SIZE + x;
+				let brush = if preview_cells.contains(&idx) {
+					if preview_valid {
+						Brush::Solid(Color::from_rgba(100, 200, 100, 180))
+					} else {
+						Brush::Solid(Color::from_rgba(200, 100, 100, 180))
+					}
+				} else if state.cell_filled(x, y) {
+					Brush::Solid(Color::from_rgba(100, 150, 255, 255))
+				} else {
+					Brush::Solid(Color::from_rgba(40, 40, 40, 255))
+				};
+
+				ui.send_message(WidgetMessage::background(self.board_cells[idx], MessageDirection::ToWidget, brush.into()));
 			}
 		}
 
 		// Update score
 		ui.send_message(TextMessage::text(self.score_text, MessageDirection::ToWidget, format!("Score: {}", state.score)));
+	}
+
+	fn rebuild_piece_tray(&mut self, ui: &mut UserInterface) {
+		// Remove old pieces
+		for &widget in &self.piece_widgets {
+			ui.send_message(WidgetMessage::remove(widget, MessageDirection::ToWidget));
+		}
+
+		// Build new pieces
+		let new_widgets = {
+			let mut ctx = ui.build_ctx();
+			self.build_piece_widgets(&mut ctx)
+		};
+
+		// Link to tray
+		for widget in new_widgets {
+			ui.send_message(WidgetMessage::link(widget, MessageDirection::ToWidget, self.piece_tray));
+		}
+	}
+
+	fn update_piece_visibility(&self, ui: &mut UserInterface) {
+		let state = self.state.as_ref().unwrap();
+		for (i, &widget) in self.piece_widgets.iter().enumerate() {
+			ui.send_message(WidgetMessage::visibility(widget, MessageDirection::ToWidget, !state.pieces[i].used));
+		}
 	}
 }
 
@@ -278,126 +250,120 @@ impl Plugin for GamePlugin {
 		let ui_root = ui.root();
 
 		{
-			let mut build_ctx = ui.build_ctx();
-			self.ui_root = self.build_ui(&mut build_ctx);
-			build_ctx.link(self.ui_root, ui_root);
+			let mut ctx = ui.build_ctx();
+			let root = self.build_ui(&mut ctx);
+			ctx.link(root, ui_root);
 		}
 
-		self.refresh_ui(ui);
+		self.refresh(ui);
 	}
 
 	fn on_ui_message(&mut self, context: &mut PluginContext, message: &UiMessage) {
-		let ui = context.user_interfaces.first_mut();
-		let dest = message.destination();
-		let state = self.state.as_mut().unwrap();
-
-		// Only process FROM widget messages (user interactions)
 		if message.direction() != MessageDirection::FromWidget {
 			return;
 		}
 
-		// Handle mouse down on piece widgets - start drag
-		if let Some(widget_msg) = message.data::<WidgetMessage>()
-			&& let WidgetMessage::MouseDown { button, pos, .. } = widget_msg
-			&& *button == MouseButton::Left
-			&& let Some(piece_idx) = self.piece_buttons.iter().position(|h| *h == dest)
-			&& !state.available_pieces[piece_idx].used
+		let ui = context.user_interfaces.first_mut();
+		let dest = message.destination();
+
+		// Mouse down on piece - start drag
+		if let Some(WidgetMessage::MouseDown {
+			button: MouseButton::Left,
+			pos,
+			..
+		}) = message.data()
 		{
-			let shape = &state.available_pieces[piece_idx];
-			let ui_root = ui.root();
-			let drag_widget = {
-				let mut build_ctx = ui.build_ctx();
-				let shape_preview = Self::build_shape_preview(&mut build_ctx, shape);
-				let widget = BorderBuilder::new(
-					WidgetBuilder::new()
-						.with_width(100.0)
-						.with_height(100.0)
-						.with_child(shape_preview)
-						.with_hit_test_visibility(false),
-				)
-				.build(&mut build_ctx);
-				build_ctx.link(widget, ui_root);
-				widget
-			};
+			if let Some(piece_idx) = self.piece_widgets.iter().position(|&h| h == dest) {
+				let state = self.state.as_ref().unwrap();
+				if !state.pieces[piece_idx].used {
+					self.dragging = Some(DragState {
+						piece_idx,
+						hover_cell: None,
+					});
 
-			ui.send_message(WidgetMessage::desired_position(drag_widget, MessageDirection::ToWidget, *pos));
-			ui.send_message(WidgetMessage::topmost(drag_widget, MessageDirection::ToWidget));
+					let widget = self.piece_widgets[piece_idx];
 
-			self.active_drag = Some(ActiveDrag {
-				piece_index: piece_idx,
-				hover_cell: None,
-				drag_widget,
-			});
-			self.refresh_ui(ui);
-			return;
-		}
+					// Unlink from grid layout so we can position freely, link to UI root
+					let ui_root = ui.root();
+					ui.send_message(WidgetMessage::link(widget, MessageDirection::ToWidget, ui_root));
 
-		// Handle mouse move anywhere - update drag widget position
-		if let Some(ref drag) = self.active_drag
-			&& let Some(widget_msg) = message.data::<WidgetMessage>()
-			&& let WidgetMessage::MouseMove { pos, .. } = widget_msg
-		{
-			ui.send_message(WidgetMessage::desired_position(drag.drag_widget, MessageDirection::ToWidget, *pos));
-		}
+					// Make hit-test invisible so mouse events pass through to board
+					ui.send_message(WidgetMessage::hit_test_visibility(widget, MessageDirection::ToWidget, false));
 
-		// Handle mouse move over board cells - update preview
-		if let Some(ref mut drag) = self.active_drag
-			&& let Some(widget_msg) = message.data::<WidgetMessage>()
-			&& matches!(widget_msg, WidgetMessage::MouseEnter)
-			&& let Some(cell_idx) = self.board_cells.iter().position(|h| *h == dest)
-		{
-			drag.hover_cell = Some(cell_idx);
-			self.refresh_ui(ui);
-			return;
-		}
+					// Position at cursor
+					let offset = *pos - fyrox::core::algebra::Vector2::new(75.0, 75.0);
+					ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
 
-		// Handle mouse leaving board cells - clear preview
-		if let Some(ref mut drag) = self.active_drag
-			&& let Some(widget_msg) = message.data::<WidgetMessage>()
-			&& matches!(widget_msg, WidgetMessage::MouseLeave)
-			&& let Some(cell_idx) = self.board_cells.iter().position(|h| *h == dest)
-			&& drag.hover_cell == Some(cell_idx)
-		{
-			drag.hover_cell = None;
-			self.refresh_ui(ui);
-			return;
-		}
-
-		// Handle mouse up - attempt placement and end drag
-		if let Some(widget_msg) = message.data::<WidgetMessage>()
-			&& let WidgetMessage::MouseUp { button, .. } = widget_msg
-			&& *button == MouseButton::Left
-			&& let Some(drag) = self.active_drag.take()
-		{
-			ui.send_message(WidgetMessage::remove(drag.drag_widget, MessageDirection::ToWidget));
-
-			if let Some(hover_cell) = drag.hover_cell {
-				let x = hover_cell % GRID_SIZE;
-				let y = hover_cell / GRID_SIZE;
-
-				let shape_blocks = state.available_pieces[drag.piece_index].blocks;
-				let shape = Shape {
-					blocks: shape_blocks,
-					used: false,
-				};
-
-				if state.can_place(&shape, x, y) {
-					state.place(&shape, x, y);
-					state.mark_piece_used(drag.piece_index);
-
-					let line_score = state.clear_complete_lines();
-					state.score += line_score;
-
-					if state.all_pieces_used() {
-						state.generate_new_pieces();
-						self.rebuild_piece_tray(ui);
-					} else {
-						self.rebuild_piece_tray(ui);
-					}
+					self.refresh(ui);
 				}
 			}
+			return;
+		}
 
-			self.refresh_ui(ui);
+		// Mouse move - update drag position (listen globally while dragging)
+		if let Some(WidgetMessage::MouseMove { pos, .. }) = message.data()
+			&& let Some(ref drag) = self.dragging
+		{
+			let widget = self.piece_widgets[drag.piece_idx];
+			let offset = *pos - fyrox::core::algebra::Vector2::new(75.0, 75.0);
+			ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
+			// Don't return here - let other handlers process this event too
+		}
+
+		// Mouse enter board cell - update hover
+		if let Some(WidgetMessage::MouseEnter) = message.data()
+			&& let Some(ref mut drag) = self.dragging
+		{
+			if let Some(cell_idx) = self.board_cells.iter().position(|&h| h == dest) {
+				drag.hover_cell = Some(cell_idx);
+				self.refresh(ui);
+			}
+			return;
+		}
+
+		// Mouse leave board cell - clear hover
+		if let Some(WidgetMessage::MouseLeave) = message.data()
+			&& let Some(ref mut drag) = self.dragging
+		{
+			if let Some(cell_idx) = self.board_cells.iter().position(|&h| h == dest)
+				&& drag.hover_cell == Some(cell_idx)
+			{
+				drag.hover_cell = None;
+				self.refresh(ui);
+			}
+			return;
+		}
+
+		// Mouse up - place shape
+		if let Some(WidgetMessage::MouseUp {
+			button: MouseButton::Left,
+			..
+		}) = message.data()
+			&& let Some(drag) = self.dragging.take()
+		{
+			let state = self.state.as_mut().unwrap();
+
+			let placed = if let Some(cell_idx) = drag.hover_cell {
+				let x = cell_idx % GRID_SIZE;
+				let y = cell_idx / GRID_SIZE;
+				state.place_shape(drag.piece_idx, x, y)
+			} else {
+				false
+			};
+
+			if placed {
+				// Check if pieces were regenerated
+				if state.pieces.iter().all(|p| !p.used) {
+					self.rebuild_piece_tray(ui);
+				} else {
+					self.update_piece_visibility(ui);
+				}
+			} else {
+				// Rebuild tray to reset positions
+				self.rebuild_piece_tray(ui);
+			}
+
+			self.refresh(ui);
 		}
 	}
 }
