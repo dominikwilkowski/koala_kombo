@@ -1,32 +1,144 @@
 use rand::Rng;
 
 pub const GRID_SIZE: usize = 8;
-pub const CELL_PX: f32 = 80.0;
-pub const GAP_PX: f32 = 4.0;
 
-const PIECES: [&[(i32, i32)]; 9] = [
-	&[(0, 0)],                                 // Single block
-	&[(0, 0), (1, 0)],                         // Horizontal 2
-	&[(0, 0), (0, 1)],                         // Vertical 2
-	&[(0, 0), (1, 0), (2, 0)],                 // Horizontal 3
-	&[(0, 0), (0, 1), (0, 2)],                 // Vertical 3
-	&[(0, 0), (1, 0), (0, 1), (1, 1)],         // 2x2 square
-	&[(0, 0), (1, 0), (1, 1)],                 // L shape
-	&[(0, 0), (1, 0), (2, 0), (1, 1)],         // T shape
-	&[(0, 0), (1, 0), (2, 0), (0, 1), (0, 2)], // Big L
-];
+#[derive(Debug, Clone, Copy)]
+pub enum Shape {
+	// original tetris shapes
+	OrganeRicky,  // ▄▄█
+	BlueRicky,    // █▄▄
+	ClevelandZ,   // ▀█▄
+	RhodeIslandZ, // ▄█▀
+	Hero,         // ▄▄▄▄
+	Teewee,       // ▄█▄
+	Smashboy,     // ██
+
+	// additional shapes
+	// █
+	// █▄
+	OrganeRickyUp,
+	// █▀
+	// █
+	BlueRickyUp,
+	// ▄█
+	// █
+	ClevelandZUp,
+	// █▄
+	//  █
+	RhodeIslandZUp,
+	// █
+	// █
+	// █
+	// █
+	HeroUp,
+	LongHero, // ▄▄▄▄▄
+	// █
+	// █
+	// █
+	// █
+	// █
+	LongHeroUp,
+	ShortHero, // ▄▄▄
+	// █
+	// █
+	// █
+	ShortHeroUp,
+	Duce, // ▄▄
+	// █
+	// █
+	DuceUp,
+	Single,     // ▄
+	TeeweeDown, // ▀█▀
+	// █
+	// ██
+	// █
+	TeeweeRight,
+	//  █
+	// ██
+	//  █
+	TeeweeLeft,
+	LongSmashboy, // ███
+	// ██
+	// ██
+	// ██
+	LongSmashboyUp,
+	// ███
+	// ███
+	// ███
+	Huge,
+}
+
+impl Shape {
+	pub fn get_anchors(&self) -> &'static [(i32, i32)] {
+		match self {
+			Shape::OrganeRicky => &[(0, 1), (1, 1), (2, 0), (2, 1)],
+			Shape::BlueRicky => &[(0, 0), (0, 1), (1, 1), (2, 1)],
+			Shape::ClevelandZ => &[(0, 0), (1, 0), (1, 1), (2, 1)],
+			Shape::RhodeIslandZ => &[(0, 1), (1, 0), (1, 1), (2, 0)],
+			Shape::Hero => &[(0, 0), (1, 0), (2, 0), (3, 0)],
+			Shape::Teewee => &[(0, 1), (1, 0), (1, 1), (2, 1)],
+			Shape::Smashboy => &[(0, 0), (0, 1), (1, 0), (1, 1)],
+			Shape::OrganeRickyUp => &[(0, 0), (0, 1), (0, 2), (1, 2)],
+			Shape::BlueRickyUp => &[(0, 0), (0, 1), (0, 2), (1, 0)],
+			Shape::ClevelandZUp => &[(1, 0), (1, 1), (0, 1), (0, 2)],
+			Shape::RhodeIslandZUp => &[(0, 0), (0, 1), (1, 1), (1, 2)],
+			Shape::HeroUp => &[(0, 0), (0, 1), (0, 2), (0, 3)],
+			Shape::LongHero => &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+			Shape::LongHeroUp => &[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
+			Shape::ShortHero => &[(0, 0), (1, 0), (2, 0)],
+			Shape::ShortHeroUp => &[(0, 0), (0, 1), (0, 2)],
+			Shape::Duce => &[(0, 0), (1, 0)],
+			Shape::DuceUp => &[(0, 0), (0, 1)],
+			Shape::Single => &[(0, 0)],
+			Shape::TeeweeDown => &[(0, 0), (1, 0), (1, 1), (2, 0)],
+			Shape::TeeweeRight => &[(0, 0), (0, 1), (1, 1), (0, 2)],
+			Shape::TeeweeLeft => &[(1, 0), (0, 1), (1, 1), (1, 2)],
+			Shape::LongSmashboy => &[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)],
+			Shape::LongSmashboyUp => &[(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)],
+			Shape::Huge => &[(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)],
+		}
+	}
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Piece {
-	pub blocks: &'static [(i32, i32)],
+	pub shape: Shape,
 	pub used: bool,
 }
 
 impl Piece {
 	fn random() -> Self {
-		let idx = rand::rng().random_range(0..PIECES.len());
+		const VARIANTS: &[Shape] = &[
+			Shape::OrganeRicky,
+			Shape::BlueRicky,
+			Shape::ClevelandZ,
+			Shape::RhodeIslandZ,
+			Shape::Hero,
+			Shape::Teewee,
+			Shape::Smashboy,
+			Shape::OrganeRickyUp,
+			Shape::BlueRickyUp,
+			Shape::ClevelandZUp,
+			Shape::RhodeIslandZUp,
+			Shape::HeroUp,
+			Shape::LongHero,
+			Shape::LongHeroUp,
+			Shape::ShortHero,
+			Shape::ShortHeroUp,
+			Shape::Duce,
+			Shape::DuceUp,
+			Shape::Single,
+			Shape::TeeweeDown,
+			Shape::TeeweeRight,
+			Shape::TeeweeLeft,
+			Shape::LongSmashboy,
+			Shape::LongSmashboyUp,
+			Shape::Huge,
+		];
+
+		let idx = rand::rng().random_range(0..VARIANTS.len());
 		Self {
-			blocks: PIECES[idx],
+			shape: VARIANTS[idx],
 			used: false,
 		}
 	}
@@ -62,7 +174,7 @@ impl KoalaKombo {
 		let ax = anchor_x as i32;
 		let ay = anchor_y as i32;
 
-		for &(dx, dy) in piece.blocks {
+		for &(dx, dy) in piece.shape.get_anchors() {
 			let x = ax + dx;
 			let y = ay + dy;
 
@@ -85,7 +197,8 @@ impl KoalaKombo {
 		let ay = anchor_y as i32;
 
 		piece
-			.blocks
+			.shape
+			.get_anchors()
 			.iter()
 			.filter_map(|&(dx, dy)| {
 				let x = ax + dx;
@@ -111,7 +224,7 @@ impl KoalaKombo {
 		let ax = anchor_x as i32;
 		let ay = anchor_y as i32;
 
-		for &(dx, dy) in piece.blocks {
+		for &(dx, dy) in piece.shape.get_anchors() {
 			let x = (ax + dx) as usize;
 			let y = (ay + dy) as usize;
 			self.board[y * GRID_SIZE + x] = true;

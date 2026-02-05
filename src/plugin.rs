@@ -13,7 +13,10 @@ use fyrox::{
 	plugin::{Plugin, PluginContext},
 };
 
-use crate::koala_kombo::{CELL_PX, GAP_PX, GRID_SIZE, KoalaKombo, Piece};
+use crate::koala_kombo::{GRID_SIZE, KoalaKombo, Piece};
+
+const CELL_PX: f32 = 80.0;
+const GAP_PX: f32 = 4.0;
 
 #[derive(Default, Visit, Reflect, Debug)]
 pub struct GamePlugin {
@@ -35,7 +38,7 @@ pub struct GamePlugin {
 
 #[derive(Debug)]
 struct DragState {
-	piece_idx: usize,
+	shape: usize,
 	hover_cell: Option<usize>,
 }
 
@@ -119,7 +122,6 @@ impl GamePlugin {
 			let piece = &state.pieces[i];
 			let shape_grid = Self::build_piece_shape(ctx, piece);
 
-			// Transparent container
 			let widget = BorderBuilder::new(
 				WidgetBuilder::new()
 					.on_column(i)
@@ -140,8 +142,11 @@ impl GamePlugin {
 	}
 
 	fn build_piece_shape(ctx: &mut BuildContext, piece: &Piece) -> Handle<UiNode> {
-		let (min_x, max_x, min_y, max_y) =
-			piece.blocks.iter().fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |(min_x, max_x, min_y, max_y), &(x, y)| {
+		let (min_x, max_x, min_y, max_y) = piece
+			.shape
+			.get_anchors()
+			.iter()
+			.fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |(min_x, max_x, min_y, max_y), &(x, y)| {
 				(min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
 			});
 
@@ -154,7 +159,8 @@ impl GamePlugin {
 		let cols = (0..width).map(|_| Column::strict(cell_size + gap)).collect::<Vec<_>>();
 
 		let children = piece
-			.blocks
+			.shape
+			.get_anchors()
 			.iter()
 			.map(|&(bx, by)| {
 				BorderBuilder::new(
@@ -173,7 +179,8 @@ impl GamePlugin {
 			WidgetBuilder::new()
 				.with_children(children)
 				.with_horizontal_alignment(HorizontalAlignment::Center)
-				.with_vertical_alignment(VerticalAlignment::Center),
+				.with_vertical_alignment(VerticalAlignment::Center)
+				.with_hit_test_visibility(false),
 		)
 		.add_rows(rows)
 		.add_columns(cols)
@@ -189,7 +196,7 @@ impl GamePlugin {
 		{
 			let x = cell_idx % GRID_SIZE;
 			let y = cell_idx / GRID_SIZE;
-			(state.preview_cells(drag.piece_idx, x, y), state.can_place(drag.piece_idx, x, y))
+			(state.preview_cells(drag.shape, x, y), state.can_place(drag.shape, x, y))
 		} else {
 			(vec![], false)
 		};
@@ -277,7 +284,7 @@ impl Plugin for GamePlugin {
 				let state = self.state.as_ref().unwrap();
 				if !state.pieces[piece_idx].used {
 					self.dragging = Some(DragState {
-						piece_idx,
+						shape: piece_idx,
 						hover_cell: None,
 					});
 
@@ -304,7 +311,7 @@ impl Plugin for GamePlugin {
 		if let Some(WidgetMessage::MouseMove { pos, .. }) = message.data()
 			&& let Some(ref drag) = self.dragging
 		{
-			let widget = self.piece_widgets[drag.piece_idx];
+			let widget = self.piece_widgets[drag.shape];
 			let offset = *pos - fyrox::core::algebra::Vector2::new(75.0, 75.0);
 			ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
 			// Don't return here - let other handlers process this event too
@@ -346,7 +353,7 @@ impl Plugin for GamePlugin {
 			let placed = if let Some(cell_idx) = drag.hover_cell {
 				let x = cell_idx % GRID_SIZE;
 				let y = cell_idx / GRID_SIZE;
-				state.place_shape(drag.piece_idx, x, y)
+				state.place_shape(drag.shape, x, y)
 			} else {
 				false
 			};
