@@ -1,12 +1,12 @@
 use fyrox::{
-	core::{color::Color, pool::Handle, reflect::prelude::*, visitor::prelude::*},
+	core::{algebra::Vector2, color::Color, pool::Handle, reflect::prelude::*, visitor::prelude::*},
+	engine::GraphicsContext,
 	gui::{
 		BuildContext, HorizontalAlignment, Thickness, UiNode, UserInterface, VerticalAlignment,
 		border::BorderBuilder,
 		brush::Brush,
 		grid::{Column, GridBuilder, Row},
 		message::{MessageDirection, MouseButton, UiMessage},
-		stack_panel::StackPanelBuilder,
 		text::{TextBuilder, TextMessage},
 		widget::{WidgetBuilder, WidgetMessage},
 	},
@@ -15,8 +15,7 @@ use fyrox::{
 
 use crate::koala_kombo::{GRID_SIZE, KoalaKombo, Piece};
 
-const CELL_PX: f32 = 80.0;
-const GAP_PX: f32 = 4.0;
+const GAP_PX: f32 = 2.0;
 
 #[derive(Default, Visit, Reflect, Debug)]
 pub struct GamePlugin {
@@ -29,6 +28,11 @@ pub struct GamePlugin {
 	piece_tray: Handle<UiNode>,
 	piece_widgets: Vec<Handle<UiNode>>,
 	score_text: Handle<UiNode>,
+
+	// Layout sizes (stored for rebuilding)
+	#[visit(skip)]
+	#[reflect(hidden)]
+	piece_widget_size: f32,
 
 	// Drag state
 	#[visit(skip)]
@@ -43,54 +47,101 @@ struct DragState {
 }
 
 impl GamePlugin {
-	fn build_ui(&mut self, ctx: &mut BuildContext) -> Handle<UiNode> {
+	fn build_ui(&mut self, ctx: &mut BuildContext, screen_size: (f32, f32)) -> Handle<UiNode> {
 		self.state = Some(KoalaKombo::new());
 
+		let (width, height) = screen_size;
+		let margin = 10.0;
+
+		// Calculate sizes based on screen
+		self.piece_widget_size = 160.0;
+		let piece_widget_size = self.piece_widget_size;
+		let piece_tray_height = piece_widget_size + margin * 2.0;
+
+		// Board takes remaining height after title, score, and piece tray
+		let title_height = 120.0;
+		let score_height = 80.0;
+		let header_height = title_height + score_height;
+		let available_for_board = height - header_height - piece_tray_height - margin * 4.0;
+		let board_size = available_for_board.min(width - margin * 2.0); // Keep square, fit in width
+
 		// Title
-		let title = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
-			.with_font_size(80.0.into())
-			.with_text("Koala Kombo")
-			.build(ctx);
+		let title = TextBuilder::new(
+			WidgetBuilder::new()
+				.on_row(0)
+				.with_margin(Thickness::uniform(8.0))
+				.with_horizontal_alignment(HorizontalAlignment::Center),
+		)
+		.with_font_size(32.0.into())
+		.with_text("Koala Kombo")
+		.with_font_size(100.0.into())
+		.build(ctx);
 
 		// Score
-		self.score_text = TextBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(8.0)))
-			.with_text("Score: 0")
-			.with_font_size(50.0.into())
-			.build(ctx);
+		self.score_text = TextBuilder::new(
+			WidgetBuilder::new()
+				.on_row(1)
+				.with_margin(Thickness::uniform(8.0))
+				.with_horizontal_alignment(HorizontalAlignment::Center),
+		)
+		.with_text("Score: 0")
+		.with_font_size(48.0.into())
+		.build(ctx);
 
 		// Board grid
-		let board_grid = self.build_board(ctx);
-		let board_border =
-			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(board_grid))
-				.with_stroke_thickness(Thickness::uniform(2.0).into())
-				.build(ctx);
+		let board_grid = self.build_board(ctx, board_size);
+		let board_border = BorderBuilder::new(
+			WidgetBuilder::new()
+				.on_row(2)
+				.with_margin(Thickness::uniform(margin))
+				.with_horizontal_alignment(HorizontalAlignment::Center)
+				.with_child(board_grid),
+		)
+		.with_stroke_thickness(Thickness::uniform(2.0).into())
+		.build(ctx);
 
 		// Piece tray
-		let piece_children = self.build_piece_widgets(ctx);
-		self.piece_tray = GridBuilder::new(WidgetBuilder::new().with_children(piece_children))
-			.add_rows(vec![Row::strict(170.0)])
-			.add_columns(vec![Column::strict(170.0); 3])
-			.build(ctx);
+		let piece_children = self.build_piece_widgets(ctx, piece_widget_size);
+		self.piece_tray = GridBuilder::new(
+			WidgetBuilder::new().with_horizontal_alignment(HorizontalAlignment::Center).with_children(piece_children),
+		)
+		.add_rows(vec![Row::strict(piece_widget_size)])
+		.add_columns(vec![Column::strict(piece_widget_size); 3])
+		.build(ctx);
 
-		let piece_border =
-			BorderBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_child(self.piece_tray))
-				.with_stroke_thickness(Thickness::uniform(2.0).into())
-				.build(ctx);
+		let piece_border = BorderBuilder::new(
+			WidgetBuilder::new()
+				.on_row(3)
+				.with_margin(Thickness::uniform(margin))
+				.with_horizontal_alignment(HorizontalAlignment::Center)
+				.with_child(self.piece_tray),
+		)
+		.with_stroke_thickness(Thickness::uniform(2.0).into())
+		.build(ctx);
 
-		StackPanelBuilder::new(WidgetBuilder::new().with_margin(Thickness::uniform(12.0)).with_children([
+		// Main layout grid
+		GridBuilder::new(WidgetBuilder::new().with_width(width).with_height(height).with_children([
 			title,
 			self.score_text,
 			board_border,
 			piece_border,
 		]))
+		.add_rows(vec![
+			Row::strict(title_height),              // Title
+			Row::strict(score_height),              // Score
+			Row::strict(board_size + margin * 2.0), // Board + margins
+			Row::strict(piece_tray_height),         // Piece tray
+		])
+		.add_columns(vec![Column::stretch()])
 		.build(ctx)
 	}
 
-	fn build_board(&mut self, ctx: &mut BuildContext) -> Handle<UiNode> {
+	fn build_board(&mut self, ctx: &mut BuildContext, board_size: f32) -> Handle<UiNode> {
 		self.board_cells.clear();
 
-		let rows = (0..GRID_SIZE).map(|_| Row::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
-		let cols = (0..GRID_SIZE).map(|_| Column::strict(CELL_PX + GAP_PX)).collect::<Vec<_>>();
+		let cell_size = board_size / GRID_SIZE as f32;
+		let rows = (0..GRID_SIZE).map(|_| Row::strict(cell_size)).collect::<Vec<_>>();
+		let cols = (0..GRID_SIZE).map(|_| Column::strict(cell_size)).collect::<Vec<_>>();
 
 		let mut children = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
 		for y in 0..GRID_SIZE {
@@ -113,7 +164,7 @@ impl GamePlugin {
 		GridBuilder::new(WidgetBuilder::new().with_children(children)).add_rows(rows).add_columns(cols).build(ctx)
 	}
 
-	fn build_piece_widgets(&mut self, ctx: &mut BuildContext) -> Vec<Handle<UiNode>> {
+	fn build_piece_widgets(&mut self, ctx: &mut BuildContext, widget_size: f32) -> Vec<Handle<UiNode>> {
 		self.piece_widgets.clear();
 		let state = self.state.as_ref().unwrap();
 
@@ -125,9 +176,9 @@ impl GamePlugin {
 			let widget = BorderBuilder::new(
 				WidgetBuilder::new()
 					.on_column(i)
-					.with_margin(Thickness::uniform(8.0))
-					.with_width(150.0)
-					.with_height(150.0)
+					.with_margin(Thickness::uniform(4.0))
+					.with_width(widget_size - 8.0)
+					.with_height(widget_size - 8.0)
 					.with_child(shape_grid)
 					.with_background(Brush::Solid(Color::TRANSPARENT).into()),
 			)
@@ -232,9 +283,10 @@ impl GamePlugin {
 		}
 
 		// Build new pieces
+		let widget_size = self.piece_widget_size;
 		let new_widgets = {
 			let mut ctx = ui.build_ctx();
-			self.build_piece_widgets(&mut ctx)
+			self.build_piece_widgets(&mut ctx, widget_size)
 		};
 
 		// Link to tray
@@ -253,12 +305,20 @@ impl GamePlugin {
 
 impl Plugin for GamePlugin {
 	fn init(&mut self, _scene_path: Option<&str>, context: PluginContext) {
+		// Get actual screen size from graphics context - use physical pixels for UI
+		let screen_size = if let GraphicsContext::Initialized(ctx) = &context.graphics_context {
+			let size = ctx.window.inner_size();
+			(size.width as f32, size.height as f32)
+		} else {
+			(1000.0, 1300.0) // Default for Retina 500x650
+		};
+
 		let ui = context.user_interfaces.first_mut();
 		let ui_root = ui.root();
 
 		{
 			let mut ctx = ui.build_ctx();
-			let root = self.build_ui(&mut ctx);
+			let root = self.build_ui(&mut ctx, screen_size);
 			ctx.link(root, ui_root);
 		}
 
@@ -297,8 +357,9 @@ impl Plugin for GamePlugin {
 					// Make hit-test invisible so mouse events pass through to board
 					ui.send_message(WidgetMessage::hit_test_visibility(widget, MessageDirection::ToWidget, false));
 
-					// Position at cursor
-					let offset = *pos - fyrox::core::algebra::Vector2::new(75.0, 75.0);
+					// Position at cursor (center the widget on cursor)
+					let half_size = (self.piece_widget_size - 8.0) / 2.0;
+					let offset = *pos - Vector2::new(half_size, half_size);
 					ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
 
 					self.refresh(ui);
@@ -312,7 +373,8 @@ impl Plugin for GamePlugin {
 			&& let Some(ref drag) = self.dragging
 		{
 			let widget = self.piece_widgets[drag.shape];
-			let offset = *pos - fyrox::core::algebra::Vector2::new(75.0, 75.0);
+			let half_size = (self.piece_widget_size - 8.0) / 2.0;
+			let offset = *pos - Vector2::new(half_size, half_size);
 			ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
 			// Don't return here - let other handlers process this event too
 		}
@@ -366,8 +428,9 @@ impl Plugin for GamePlugin {
 					self.update_piece_visibility(ui);
 				}
 			} else {
-				// Rebuild tray to reset positions
+				// Rebuild tray to reset positions, then hide used pieces
 				self.rebuild_piece_tray(ui);
+				self.update_piece_visibility(ui);
 			}
 
 			self.refresh(ui);

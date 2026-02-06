@@ -5,7 +5,7 @@ pub const GRID_SIZE: usize = 8;
 #[derive(Debug, Clone, Copy)]
 pub enum Shape {
 	// original tetris shapes
-	OrganeRicky,  // ▄▄█
+	OrangeRicky,  // ▄▄█
 	BlueRicky,    // █▄▄
 	ClevelandZ,   // ▀█▄
 	RhodeIslandZ, // ▄█▀
@@ -71,7 +71,7 @@ pub enum Shape {
 impl Shape {
 	pub fn get_anchors(&self) -> &'static [(i32, i32)] {
 		match self {
-			Shape::OrganeRicky => &[(0, 1), (1, 1), (2, 0), (2, 1)],
+			Shape::OrangeRicky => &[(0, 1), (1, 1), (2, 0), (2, 1)],
 			Shape::BlueRicky => &[(0, 0), (0, 1), (1, 1), (2, 1)],
 			Shape::ClevelandZ => &[(0, 0), (1, 0), (1, 1), (2, 1)],
 			Shape::RhodeIslandZ => &[(0, 1), (1, 0), (1, 1), (2, 0)],
@@ -109,7 +109,7 @@ pub struct Piece {
 impl Piece {
 	fn random() -> Self {
 		const VARIANTS: &[Shape] = &[
-			Shape::OrganeRicky,
+			Shape::OrangeRicky,
 			Shape::BlueRicky,
 			Shape::ClevelandZ,
 			Shape::RhodeIslandZ,
@@ -269,5 +269,18 @@ impl KoalaKombo {
 		}
 
 		score
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn new_test() {
+		let game = KoalaKombo::new();
+		assert_eq!(game.score, 0);
+		assert_eq!(game.board.len(), GRID_SIZE * GRID_SIZE);
+		assert_eq!(game.pieces.len(), 3);
 	}
 }
