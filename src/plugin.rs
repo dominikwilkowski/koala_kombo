@@ -1,6 +1,8 @@
 use fyrox::{
 	core::{algebra::Vector2, color::Color, pool::Handle, reflect::prelude::*, visitor::prelude::*},
-	engine::GraphicsContext,
+	dpi::LogicalSize,
+	engine::{GraphicsContext, GraphicsContextParams, executor::Executor},
+	event_loop::EventLoop,
 	gui::{
 		BuildContext, HorizontalAlignment, Thickness, UiNode, UserInterface, VerticalAlignment,
 		border::BorderBuilder,
@@ -11,11 +13,13 @@ use fyrox::{
 		widget::{WidgetBuilder, WidgetMessage},
 	},
 	plugin::{Plugin, PluginContext},
+	renderer::framework::core::log::{Log, MessageKind},
+	window::WindowAttributes,
 };
 
-use crate::koala_kombo::{GRID_SIZE, KoalaKombo, Piece};
+use crate::koala_kombo::{Coord, GRID_SIZE, KoalaKombo, Piece};
 
-const GAP_PX: f32 = 2.0;
+const GAP_PX: f32 = 1.0;
 
 #[derive(Default, Visit, Reflect, Debug)]
 pub struct GamePlugin {
@@ -43,7 +47,7 @@ pub struct GamePlugin {
 #[derive(Debug)]
 struct DragState {
 	shape: usize,
-	hover_cell: Option<usize>,
+	hover_cell: Option<Coord>,
 }
 
 impl GamePlugin {
@@ -72,9 +76,8 @@ impl GamePlugin {
 				.with_margin(Thickness::uniform(8.0))
 				.with_horizontal_alignment(HorizontalAlignment::Center),
 		)
-		.with_font_size(32.0.into())
-		.with_text("Koala Kombo")
 		.with_font_size(100.0.into())
+		.with_text("Koala Kombo")
 		.build(ctx);
 
 		// Score
@@ -141,15 +144,15 @@ impl GamePlugin {
 
 		let cell_size = board_size / GRID_SIZE as f32;
 		let rows = (0..GRID_SIZE).map(|_| Row::strict(cell_size)).collect::<Vec<_>>();
-		let cols = (0..GRID_SIZE).map(|_| Column::strict(cell_size)).collect::<Vec<_>>();
+		let columns = (0..GRID_SIZE).map(|_| Column::strict(cell_size)).collect::<Vec<_>>();
 
 		let mut children = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-		for y in 0..GRID_SIZE {
-			for x in 0..GRID_SIZE {
+		for row in 0..GRID_SIZE {
+			for column in 0..GRID_SIZE {
 				let cell = BorderBuilder::new(
 					WidgetBuilder::new()
-						.on_row(y)
-						.on_column(x)
+						.on_row(row)
+						.on_column(column)
 						.with_margin(Thickness::uniform(GAP_PX * 0.5))
 						.with_background(Brush::Solid(Color::from_rgba(40, 40, 40, 255)).into()),
 				)
@@ -161,7 +164,7 @@ impl GamePlugin {
 			}
 		}
 
-		GridBuilder::new(WidgetBuilder::new().with_children(children)).add_rows(rows).add_columns(cols).build(ctx)
+		GridBuilder::new(WidgetBuilder::new().with_children(children)).add_rows(rows).add_columns(columns).build(ctx)
 	}
 
 	fn build_piece_widgets(&mut self, ctx: &mut BuildContext, widget_size: f32) -> Vec<Handle<UiNode>> {
@@ -193,31 +196,30 @@ impl GamePlugin {
 	}
 
 	fn build_piece_shape(ctx: &mut BuildContext, piece: &Piece) -> Handle<UiNode> {
-		let (min_x, max_x, min_y, max_y) = piece
-			.shape
-			.get_anchors()
-			.iter()
-			.fold((i32::MAX, i32::MIN, i32::MAX, i32::MIN), |(min_x, max_x, min_y, max_y), &(x, y)| {
-				(min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
-			});
+		let (min_column, max_column, min_row, max_row) = piece.shape.get_coords().iter().fold(
+			(usize::MAX, 0, usize::MAX, 0),
+			|(min_column, max_column, min_row, max_row), a| {
+				(min_column.min(a.column), max_column.max(a.column), min_row.min(a.row), max_row.max(a.row))
+			},
+		);
 
-		let width = (max_x - min_x + 1) as usize;
-		let height = (max_y - min_y + 1) as usize;
+		let width = max_column - min_column + 1;
+		let height = max_row - min_row + 1;
 		let cell_size = 30.0;
 		let gap = 2.0;
 
 		let rows = (0..height).map(|_| Row::strict(cell_size + gap)).collect::<Vec<_>>();
-		let cols = (0..width).map(|_| Column::strict(cell_size + gap)).collect::<Vec<_>>();
+		let columns = (0..width).map(|_| Column::strict(cell_size + gap)).collect::<Vec<_>>();
 
 		let children = piece
 			.shape
-			.get_anchors()
+			.get_coords()
 			.iter()
-			.map(|&(bx, by)| {
+			.map(|a| {
 				BorderBuilder::new(
 					WidgetBuilder::new()
-						.on_row((by - min_y) as usize)
-						.on_column((bx - min_x) as usize)
+						.on_row(a.row - min_row)
+						.on_column(a.column - min_column)
 						.with_margin(Thickness::uniform(gap * 0.5))
 						.with_background(Brush::Solid(Color::from_rgba(100, 150, 255, 255)).into()),
 				)
@@ -234,7 +236,7 @@ impl GamePlugin {
 				.with_hit_test_visibility(false),
 		)
 		.add_rows(rows)
-		.add_columns(cols)
+		.add_columns(columns)
 		.build(ctx)
 	}
 
@@ -243,32 +245,40 @@ impl GamePlugin {
 
 		// Calculate preview cells if dragging over board
 		let (preview_cells, preview_valid) = if let Some(ref drag) = self.dragging
-			&& let Some(cell_idx) = drag.hover_cell
+			&& let Some(hover) = drag.hover_cell
 		{
-			let x = cell_idx % GRID_SIZE;
-			let y = cell_idx / GRID_SIZE;
-			(state.preview_cells(drag.shape, x, y), state.can_place(drag.shape, x, y))
+			match state.can_place(drag.shape, hover) {
+				Some(cells) => {
+					let valid = !cells.iter().any(|&c| state.cell_filled(c));
+					(cells, valid)
+				},
+				None => (vec![], false),
+			}
 		} else {
 			(vec![], false)
 		};
 
 		// Paint board cells
-		for y in 0..GRID_SIZE {
-			for x in 0..GRID_SIZE {
-				let idx = y * GRID_SIZE + x;
-				let brush = if preview_cells.contains(&idx) {
+		for row in 0..GRID_SIZE {
+			for column in 0..GRID_SIZE {
+				let pos = Coord::new(column, row);
+				let brush = if preview_cells.contains(&pos) {
 					if preview_valid {
 						Brush::Solid(Color::from_rgba(100, 200, 100, 180))
 					} else {
 						Brush::Solid(Color::from_rgba(200, 100, 100, 180))
 					}
-				} else if state.cell_filled(x, y) {
+				} else if state.cell_filled(pos) {
 					Brush::Solid(Color::from_rgba(100, 150, 255, 255))
 				} else {
 					Brush::Solid(Color::from_rgba(40, 40, 40, 255))
 				};
 
-				ui.send_message(WidgetMessage::background(self.board_cells[idx], MessageDirection::ToWidget, brush.into()));
+				ui.send_message(WidgetMessage::background(
+					self.board_cells[pos.to_index()],
+					MessageDirection::ToWidget,
+					brush.into(),
+				));
 			}
 		}
 
@@ -383,8 +393,8 @@ impl Plugin for GamePlugin {
 		if let Some(WidgetMessage::MouseEnter) = message.data()
 			&& let Some(ref mut drag) = self.dragging
 		{
-			if let Some(cell_idx) = self.board_cells.iter().position(|&h| h == dest) {
-				drag.hover_cell = Some(cell_idx);
+			if let Some(idx) = self.board_cells.iter().position(|&h| h == dest) {
+				drag.hover_cell = Some(Coord::from_index(idx));
 				self.refresh(ui);
 			}
 			return;
@@ -394,8 +404,8 @@ impl Plugin for GamePlugin {
 		if let Some(WidgetMessage::MouseLeave) = message.data()
 			&& let Some(ref mut drag) = self.dragging
 		{
-			if let Some(cell_idx) = self.board_cells.iter().position(|&h| h == dest)
-				&& drag.hover_cell == Some(cell_idx)
+			if let Some(idx) = self.board_cells.iter().position(|&h| h == dest)
+				&& drag.hover_cell == Some(Coord::from_index(idx))
 			{
 				drag.hover_cell = None;
 				self.refresh(ui);
@@ -412,10 +422,8 @@ impl Plugin for GamePlugin {
 		{
 			let state = self.state.as_mut().unwrap();
 
-			let placed = if let Some(cell_idx) = drag.hover_cell {
-				let x = cell_idx % GRID_SIZE;
-				let y = cell_idx / GRID_SIZE;
-				state.place_shape(drag.shape, x, y)
+			let placed = if let Some(hover) = drag.hover_cell {
+				state.place_shape(drag.shape, hover)
 			} else {
 				false
 			};
