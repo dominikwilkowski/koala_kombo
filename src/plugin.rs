@@ -1,5 +1,12 @@
 use fyrox::{
-	core::{algebra::Vector2, color::Color, pool::Handle, reflect::prelude::*, visitor::prelude::*},
+	core::{
+		algebra::Vector2,
+		color::Color,
+		log::{Log, MessageKind},
+		pool::Handle,
+		reflect::prelude::*,
+		visitor::prelude::*,
+	},
 	dpi::LogicalSize,
 	engine::{GraphicsContext, GraphicsContextParams, executor::Executor},
 	event_loop::EventLoop,
@@ -12,8 +19,7 @@ use fyrox::{
 		text::{TextBuilder, TextMessage},
 		widget::{WidgetBuilder, WidgetMessage},
 	},
-	plugin::{Plugin, PluginContext},
-	renderer::framework::core::log::{Log, MessageKind},
+	plugin::{Plugin, PluginContext, error::GameResult},
 	window::WindowAttributes,
 };
 
@@ -21,7 +27,7 @@ use crate::koala_kombo::{Coord, GRID_SIZE, KoalaKombo, Piece};
 
 const GAP_PX: f32 = 1.0;
 
-#[derive(Default, Visit, Reflect, Debug)]
+#[derive(Default, Visit, Reflect, Debug, Clone)]
 pub struct GamePlugin {
 	#[visit(skip)]
 	#[reflect(hidden)]
@@ -44,7 +50,7 @@ pub struct GamePlugin {
 	dragging: Option<DragState>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DragState {
 	shape: usize,
 	hover_cell: Option<Coord>,
@@ -76,7 +82,7 @@ impl GamePlugin {
 				.with_margin(Thickness::uniform(8.0))
 				.with_horizontal_alignment(HorizontalAlignment::Center),
 		)
-		.with_font_size(100.0.into())
+		.with_font_size(100.0f32.into())
 		.with_text("Koala Kombo")
 		.build(ctx);
 
@@ -88,8 +94,9 @@ impl GamePlugin {
 				.with_horizontal_alignment(HorizontalAlignment::Center),
 		)
 		.with_text("Score: 0")
-		.with_font_size(48.0.into())
-		.build(ctx);
+		.with_font_size(48.0f32.into())
+		.build(ctx)
+		.transmute();
 
 		// Board grid
 		let board_grid = self.build_board(ctx, board_size);
@@ -110,7 +117,8 @@ impl GamePlugin {
 		)
 		.add_rows(vec![Row::strict(piece_widget_size)])
 		.add_columns(vec![Column::strict(piece_widget_size); 3])
-		.build(ctx);
+		.build(ctx)
+		.transmute();
 
 		let piece_border = BorderBuilder::new(
 			WidgetBuilder::new()
@@ -124,10 +132,10 @@ impl GamePlugin {
 
 		// Main layout grid
 		GridBuilder::new(WidgetBuilder::new().with_width(width).with_height(height).with_children([
-			title,
+			title.transmute(),
 			self.score_text,
-			board_border,
-			piece_border,
+			board_border.transmute(),
+			piece_border.transmute(),
 		]))
 		.add_rows(vec![
 			Row::strict(title_height),              // Title
@@ -137,6 +145,7 @@ impl GamePlugin {
 		])
 		.add_columns(vec![Column::stretch()])
 		.build(ctx)
+		.transmute()
 	}
 
 	fn build_board(&mut self, ctx: &mut BuildContext, board_size: f32) -> Handle<UiNode> {
@@ -159,12 +168,16 @@ impl GamePlugin {
 				.with_stroke_thickness(Thickness::uniform(1.0).into())
 				.build(ctx);
 
-				self.board_cells.push(cell);
-				children.push(cell);
+				self.board_cells.push(cell.transmute());
+				children.push(cell.transmute());
 			}
 		}
 
-		GridBuilder::new(WidgetBuilder::new().with_children(children)).add_rows(rows).add_columns(columns).build(ctx)
+		GridBuilder::new(WidgetBuilder::new().with_children(children))
+			.add_rows(rows)
+			.add_columns(columns)
+			.build(ctx)
+			.transmute()
 	}
 
 	fn build_piece_widgets(&mut self, ctx: &mut BuildContext, widget_size: f32) -> Vec<Handle<UiNode>> {
@@ -188,8 +201,8 @@ impl GamePlugin {
 			.with_stroke_thickness(Thickness::uniform(0.0).into())
 			.build(ctx);
 
-			self.piece_widgets.push(widget);
-			children.push(widget);
+			self.piece_widgets.push(widget.transmute());
+			children.push(widget.transmute());
 		}
 
 		children
@@ -211,7 +224,7 @@ impl GamePlugin {
 		let rows = (0..height).map(|_| Row::strict(cell_size + gap)).collect::<Vec<_>>();
 		let columns = (0..width).map(|_| Column::strict(cell_size + gap)).collect::<Vec<_>>();
 
-		let children = piece
+		let children: Vec<Handle<UiNode>> = piece
 			.shape
 			.get_coords()
 			.iter()
@@ -225,8 +238,9 @@ impl GamePlugin {
 				)
 				.with_stroke_thickness(Thickness::uniform(1.0).into())
 				.build(ctx)
+				.transmute()
 			})
-			.collect::<Vec<_>>();
+			.collect();
 
 		GridBuilder::new(
 			WidgetBuilder::new()
@@ -238,9 +252,10 @@ impl GamePlugin {
 		.add_rows(rows)
 		.add_columns(columns)
 		.build(ctx)
+		.transmute()
 	}
 
-	fn refresh(&self, ui: &mut UserInterface) {
+	fn refresh(&self, ui: &UserInterface) {
 		let state = self.state.as_ref().unwrap();
 
 		// Calculate preview cells if dragging over board
@@ -274,22 +289,21 @@ impl GamePlugin {
 					Brush::Solid(Color::from_rgba(40, 40, 40, 255))
 				};
 
-				ui.send_message(WidgetMessage::background(
+				ui.send_message(UiMessage::for_widget(
 					self.board_cells[pos.to_index()],
-					MessageDirection::ToWidget,
-					brush.into(),
+					WidgetMessage::Background(brush.into()),
 				));
 			}
 		}
 
 		// Update score
-		ui.send_message(TextMessage::text(self.score_text, MessageDirection::ToWidget, format!("Score: {}", state.score)));
+		ui.send_message(UiMessage::for_widget(self.score_text, TextMessage::Text(format!("Score: {}", state.score))));
 	}
 
 	fn rebuild_piece_tray(&mut self, ui: &mut UserInterface) {
 		// Remove old pieces
 		for &widget in &self.piece_widgets {
-			ui.send_message(WidgetMessage::remove(widget, MessageDirection::ToWidget));
+			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::Remove));
 		}
 
 		// Build new pieces
@@ -301,20 +315,43 @@ impl GamePlugin {
 
 		// Link to tray
 		for widget in new_widgets {
-			ui.send_message(WidgetMessage::link(widget, MessageDirection::ToWidget, self.piece_tray));
+			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::LinkWith(self.piece_tray)));
 		}
 	}
 
-	fn update_piece_visibility(&self, ui: &mut UserInterface) {
+	fn update_piece_visibility(&self, ui: &UserInterface) {
 		let state = self.state.as_ref().unwrap();
 		for (i, &widget) in self.piece_widgets.iter().enumerate() {
-			ui.send_message(WidgetMessage::visibility(widget, MessageDirection::ToWidget, !state.pieces[i].used));
+			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::Visibility(!state.pieces[i].used)));
 		}
+	}
+
+	pub fn run_game() {
+		Log::set_verbosity(MessageKind::Warning);
+
+		let event_loop = EventLoop::new().unwrap();
+
+		let mut window_attributes = WindowAttributes::default();
+		window_attributes.title = String::from("Koala Kombo");
+		window_attributes.resizable = false;
+		window_attributes.inner_size = Some(LogicalSize::new(500.0, 650.0).into());
+
+		let params = GraphicsContextParams {
+			window_attributes,
+			vsync: true,
+			msaa_sample_count: None,
+			graphics_server_constructor: Default::default(),
+			named_objects: false,
+		};
+
+		let mut executor = Executor::from_params(Some(event_loop), params);
+		executor.add_plugin(GamePlugin::default());
+		executor.run();
 	}
 }
 
 impl Plugin for GamePlugin {
-	fn init(&mut self, _scene_path: Option<&str>, context: PluginContext) {
+	fn init(&mut self, _scene_path: Option<&str>, context: PluginContext) -> GameResult {
 		// Get actual screen size from graphics context - use physical pixels for UI
 		let screen_size = if let GraphicsContext::Initialized(ctx) = &context.graphics_context {
 			let size = ctx.window.inner_size();
@@ -333,11 +370,18 @@ impl Plugin for GamePlugin {
 		}
 
 		self.refresh(ui);
+
+		Ok(())
 	}
 
-	fn on_ui_message(&mut self, context: &mut PluginContext, message: &UiMessage) {
+	fn on_ui_message(
+		&mut self,
+		context: &mut PluginContext,
+		message: &UiMessage,
+		_ui_handle: Handle<UserInterface>,
+	) -> GameResult {
 		if message.direction() != MessageDirection::FromWidget {
-			return;
+			return Ok(());
 		}
 
 		let ui = context.user_interfaces.first_mut();
@@ -362,20 +406,20 @@ impl Plugin for GamePlugin {
 
 					// Unlink from grid layout so we can position freely, link to UI root
 					let ui_root = ui.root();
-					ui.send_message(WidgetMessage::link(widget, MessageDirection::ToWidget, ui_root));
+					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::LinkWith(ui_root)));
 
 					// Make hit-test invisible so mouse events pass through to board
-					ui.send_message(WidgetMessage::hit_test_visibility(widget, MessageDirection::ToWidget, false));
+					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::HitTestVisibility(false)));
 
 					// Position at cursor (center the widget on cursor)
 					let half_size = (self.piece_widget_size - 8.0) / 2.0;
 					let offset = *pos - Vector2::new(half_size, half_size);
-					ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
+					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
 
 					self.refresh(ui);
 				}
 			}
-			return;
+			return Ok(());
 		}
 
 		// Mouse move - update drag position (listen globally while dragging)
@@ -385,7 +429,7 @@ impl Plugin for GamePlugin {
 			let widget = self.piece_widgets[drag.shape];
 			let half_size = (self.piece_widget_size - 8.0) / 2.0;
 			let offset = *pos - Vector2::new(half_size, half_size);
-			ui.send_message(WidgetMessage::desired_position(widget, MessageDirection::ToWidget, offset));
+			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
 			// Don't return here - let other handlers process this event too
 		}
 
@@ -397,7 +441,7 @@ impl Plugin for GamePlugin {
 				drag.hover_cell = Some(Coord::from_index(idx));
 				self.refresh(ui);
 			}
-			return;
+			return Ok(());
 		}
 
 		// Mouse leave board cell - clear hover
@@ -410,7 +454,7 @@ impl Plugin for GamePlugin {
 				drag.hover_cell = None;
 				self.refresh(ui);
 			}
-			return;
+			return Ok(());
 		}
 
 		// Mouse up - place shape
@@ -443,5 +487,7 @@ impl Plugin for GamePlugin {
 
 			self.refresh(ui);
 		}
+
+		Ok(())
 	}
 }

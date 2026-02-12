@@ -3,6 +3,13 @@ name = "koala_kombo"
 version = "1.0.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
-fyrox = "0.36"
-rand = "0.9"
+fyrox = "1.0.0-rc.2"
+rand = "0.10"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+getrandom = { version = "0.3", features = ["wasm_js"] }

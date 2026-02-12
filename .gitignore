@@ -29,3 +29,6 @@ target
 
 # VS Code settings
 settings.json
+
+# WASM artifacts
+web/

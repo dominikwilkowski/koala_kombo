@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 pub const GRID_SIZE: usize = 8;
 
@@ -276,7 +276,7 @@ impl Piece {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KoalaKombo {
 	board: [bool; GRID_SIZE * GRID_SIZE],
 	pub pieces: [Piece; 3],
