@@ -10,6 +10,7 @@ use fyrox::{
 	dpi::LogicalSize,
 	engine::{GraphicsContext, GraphicsContextParams, executor::Executor},
 	event_loop::EventLoop,
+	graph::SceneGraph,
 	gui::{
 		BuildContext, HorizontalAlignment, Thickness, UiNode, UserInterface, VerticalAlignment,
 		border::BorderBuilder,
@@ -57,6 +58,88 @@ struct DragState {
 }
 
 impl GamePlugin {
+	fn start_drag(&mut self, piece_idx: usize, pos: &Vector2<f32>, ui: &mut UserInterface) {
+		let state = self.state.as_ref().unwrap();
+		if state.pieces[piece_idx].used {
+			return;
+		}
+
+		self.dragging = Some(DragState {
+			shape: piece_idx,
+			hover_cell: None,
+		});
+
+		let widget = self.piece_widgets[piece_idx];
+
+		// Unlink from grid layout so we can position freely, link to UI root
+		let ui_root = ui.root();
+		ui.send_message(UiMessage::for_widget(widget, WidgetMessage::LinkWith(ui_root)));
+
+		// Make hit-test invisible so mouse events pass through to board
+		ui.send_message(UiMessage::for_widget(widget, WidgetMessage::HitTestVisibility(false)));
+
+		// Position centered on cursor/finger
+		let half_size = (self.piece_widget_size - 8.0) / 2.0;
+		let offset = *pos - Vector2::new(half_size, half_size);
+		ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
+
+		self.refresh(ui);
+	}
+
+	fn update_drag(&mut self, pos: &Vector2<f32>, ui: &UserInterface) {
+		if let Some(ref drag) = self.dragging {
+			let widget = self.piece_widgets[drag.shape];
+			let half_size = (self.piece_widget_size - 8.0) / 2.0;
+			let offset = *pos - Vector2::new(half_size, half_size);
+			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
+		}
+	}
+
+	fn update_hover_from_pos(&mut self, pos: &Vector2<f32>, ui: &UserInterface) {
+		let new_cell = self.find_board_cell_at_pos(pos, ui);
+		if let Some(ref mut drag) = self.dragging {
+			if new_cell != drag.hover_cell {
+				drag.hover_cell = new_cell;
+				self.refresh(ui);
+			}
+		}
+	}
+
+	fn end_drag(&mut self, ui: &mut UserInterface) {
+		if let Some(drag) = self.dragging.take() {
+			let state = self.state.as_mut().unwrap();
+
+			let placed = if let Some(hover) = drag.hover_cell {
+				state.place_shape(drag.shape, hover)
+			} else {
+				false
+			};
+
+			if placed {
+				if state.pieces.iter().all(|p| !p.used) {
+					self.rebuild_piece_tray(ui);
+				} else {
+					self.update_piece_visibility(ui);
+				}
+			} else {
+				self.rebuild_piece_tray(ui);
+				self.update_piece_visibility(ui);
+			}
+
+			self.refresh(ui);
+		}
+	}
+
+	fn find_board_cell_at_pos(&self, pos: &Vector2<f32>, ui: &UserInterface) -> Option<Coord> {
+		for (idx, &cell_handle) in self.board_cells.iter().enumerate() {
+			let cell = ui.node(cell_handle);
+			if cell.screen_bounds().contains(*pos) {
+				return Some(Coord::from_index(idx));
+			}
+		}
+		None
+	}
+
 	fn build_ui(&mut self, ctx: &mut BuildContext, screen_size: (f32, f32)) -> Handle<UiNode> {
 		self.state = Some(KoalaKombo::new());
 
@@ -395,42 +478,33 @@ impl Plugin for GamePlugin {
 		}) = message.data()
 		{
 			if let Some(piece_idx) = self.piece_widgets.iter().position(|&h| h == dest) {
-				let state = self.state.as_ref().unwrap();
-				if !state.pieces[piece_idx].used {
-					self.dragging = Some(DragState {
-						shape: piece_idx,
-						hover_cell: None,
-					});
-
-					let widget = self.piece_widgets[piece_idx];
-
-					// Unlink from grid layout so we can position freely, link to UI root
-					let ui_root = ui.root();
-					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::LinkWith(ui_root)));
-
-					// Make hit-test invisible so mouse events pass through to board
-					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::HitTestVisibility(false)));
-
-					// Position at cursor (center the widget on cursor)
-					let half_size = (self.piece_widget_size - 8.0) / 2.0;
-					let offset = *pos - Vector2::new(half_size, half_size);
-					ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
-
-					self.refresh(ui);
-				}
+				self.start_drag(piece_idx, pos, ui);
 			}
 			return Ok(());
 		}
 
-		// Mouse move - update drag position (listen globally while dragging)
+		// Touch start on piece - start drag
+		if let Some(WidgetMessage::TouchStarted { pos, .. }) = message.data() {
+			if let Some(piece_idx) = self.piece_widgets.iter().position(|&h| h == dest) {
+				self.start_drag(piece_idx, pos, ui);
+			}
+			return Ok(());
+		}
+
+		// Mouse move - update drag position
 		if let Some(WidgetMessage::MouseMove { pos, .. }) = message.data()
-			&& let Some(ref drag) = self.dragging
+			&& self.dragging.is_some()
 		{
-			let widget = self.piece_widgets[drag.shape];
-			let half_size = (self.piece_widget_size - 8.0) / 2.0;
-			let offset = *pos - Vector2::new(half_size, half_size);
-			ui.send_message(UiMessage::for_widget(widget, WidgetMessage::DesiredPosition(offset)));
+			self.update_drag(pos, ui);
 			// Don't return here - let other handlers process this event too
+		}
+
+		// Touch move - update drag position and hover (no MouseEnter/Leave for touch)
+		if let Some(WidgetMessage::TouchMoved { pos, .. }) = message.data()
+			&& self.dragging.is_some()
+		{
+			self.update_drag(pos, ui);
+			self.update_hover_from_pos(pos, ui);
 		}
 
 		// Mouse enter board cell - update hover
@@ -462,30 +536,23 @@ impl Plugin for GamePlugin {
 			button: MouseButton::Left,
 			..
 		}) = message.data()
-			&& let Some(drag) = self.dragging.take()
+			&& self.dragging.is_some()
 		{
-			let state = self.state.as_mut().unwrap();
+			self.end_drag(ui);
+		}
 
-			let placed = if let Some(hover) = drag.hover_cell {
-				state.place_shape(drag.shape, hover)
-			} else {
-				false
-			};
+		// Touch end - place shape
+		if let Some(WidgetMessage::TouchEnded { .. }) = message.data()
+			&& self.dragging.is_some()
+		{
+			self.end_drag(ui);
+		}
 
-			if placed {
-				// Check if pieces were regenerated
-				if state.pieces.iter().all(|p| !p.used) {
-					self.rebuild_piece_tray(ui);
-				} else {
-					self.update_piece_visibility(ui);
-				}
-			} else {
-				// Rebuild tray to reset positions, then hide used pieces
-				self.rebuild_piece_tray(ui);
-				self.update_piece_visibility(ui);
-			}
-
-			self.refresh(ui);
+		// Touch cancelled - cancel drag
+		if let Some(WidgetMessage::TouchCancelled { .. }) = message.data()
+			&& self.dragging.is_some()
+		{
+			self.end_drag(ui);
 		}
 
 		Ok(())
