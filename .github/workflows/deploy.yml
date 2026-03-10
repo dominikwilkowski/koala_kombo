@@ -24,21 +24,43 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache Rust build
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-target-
+
+      - name: Get wasm-bindgen version
+        id: wasm-bindgen-version
+        run: |
+          VERSION=$(awk '/^name = "wasm-bindgen"$/ { found=1 } found && /^version/ { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache wasm-bindgen-cli binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ runner.os }}-wasm-bindgen-${{ steps.wasm-bindgen-version.outputs.version }}
 
       - name: Install wasm-bindgen-cli
         run: |
-          VERSION=$(awk '/^name = "wasm-bindgen"$/ { found=1 } found && /^version/ { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
-          echo "Installing wasm-bindgen-cli $VERSION"
-          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+          VERSION="${{ steps.wasm-bindgen-version.outputs.version }}"
+          if ! wasm-bindgen --version 2>/dev/null | grep -q "$VERSION"; then
+            echo "Installing wasm-bindgen-cli $VERSION"
+            cargo install wasm-bindgen-cli --version "$VERSION" --locked
+          else
+            echo "wasm-bindgen-cli $VERSION already cached, skipping"
+          fi
 
       - name: Build WASM
         # Run everything except the final http.server line
