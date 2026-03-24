@@ -2,7 +2,7 @@ use fyrox::{
 	core::{
 		algebra::Vector2,
 		color::Color,
-		log::{Log, MessageKind},
+		log::Log,
 		pool::Handle,
 		reflect::prelude::*,
 		visitor::prelude::*,
@@ -410,7 +410,7 @@ impl GamePlugin {
 	}
 
 	pub fn run_game() {
-		Log::set_verbosity(MessageKind::Warning);
+		Log::set_log_info(false);
 
 		let event_loop = EventLoop::new().unwrap();
 
