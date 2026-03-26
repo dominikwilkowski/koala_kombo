@@ -443,6 +443,10 @@ impl Plugin for GamePlugin {
 			(1000.0, 1300.0) // Default for Retina 500x650
 		};
 
+		context
+			.user_interfaces
+			.add(UserInterface::new(Vector2::new(screen_size.0, screen_size.1)));
+
 		let ui = context.user_interfaces.first_mut();
 		let ui_root = ui.root();
 
